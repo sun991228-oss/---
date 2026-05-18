@@ -351,17 +351,20 @@ def calc_grade_rankings(evaluations, tasks_data):
             continue
         p      = profiles.get(uid, {})
         ee_pos = p.get("position", u.get("position", "팀원"))
+        # 직책 기준 평가 차수 목록
         ee_stages = get_stage_order_for_ee(ee_pos)
         ev     = evaluations.get(uid, {})
         tasks  = tasks_data.get(uid, {}).get("tasks", [])
 
+        # 해당 직책의 모든 차수가 완료됐는지 확인
         if not all(ev.get(s) for s in ee_stages):
+            continue
+        # 직무수행태도 완료 여부 (팀원·공무직만 필수)
+        if ee_pos in ("팀원", "공무직") and ev.get("deductions") is None:
             continue
 
         result = calc_final(uid, evaluations, tasks_data)
         종합   = result.get("종합", {})
-        if not 종합.get("완료"):
-            continue
 
         rows.append({
             "uid":      uid,
@@ -370,12 +373,8 @@ def calc_grade_rankings(evaluations, tasks_data):
             "소속팀":   p.get("team", u.get("team","")),
             "직책":     ee_pos,
             "직급":     p.get("grade", u.get("grade","")),
-            "최종점수": 종합["최종"],
-            "근무실적(A)": 종합["A_가중"],
-            "직무능력(B)": 종합["B_가중"],
-            "직무태도(C)": 종합["C"],
+            "최종점수": 종합.get("최종", 0),
             **{f"{st_} 환산": result.get(st_, {}).get("AB", "-") for st_ in ee_stages},
-            "확정등급": ev.get("assigned_grade", "미확정"),
         })
     if not rows:
         return pd.DataFrame()
@@ -409,15 +408,7 @@ def show_login():
             if st.button("로그인", type="primary", use_container_width=True):
                 users = get_users()
                 input_hash = hash_pw(pw)
-                db_hash = users.get(uid, {}).get("password", "없음")
-
-                # 디버그 (문제 해결 후 삭제)
-                with st.expander("🔍 디버그 정보"):
-                    st.code(f"입력 해시: {input_hash}")
-                    st.code(f"DB 해시:  {db_hash}")
-                    st.code(f"uid 존재: {uid in users}")
-                    st.code(f"일치여부: {input_hash == db_hash}")
-
+                db_hash = users.get(uid, {}).get("password", "")
                 if uid in users and db_hash == input_hash:
                     for k,v in [("logged_in",True),("username",uid),
                                  ("role",users[uid]["role"]),("name",users[uid]["name"])]:
@@ -444,7 +435,7 @@ def show_evaluatee():
     st.caption(f"👤 {name} | {dept} {team} | {pos} ({grd})")
     st.divider()
 
-    t1, t2, t3 = st.tabs(["👤 인적사항","📝 담당업무·과제","📊 평가 결과"])
+    t1, t2 = st.tabs(["👤 인적사항","📝 담당업무·과제"])
 
     with t1:
         st.subheader("인적 사항")
@@ -509,25 +500,6 @@ def show_evaluatee():
                                          "비중":f"{t['weight']:.0%}","주요실적":t.get("result","")}
                                         for t in my_tasks]), use_container_width=True, hide_index=True)
 
-    with t3:
-        st.subheader("내 평가 결과")
-        evaluations = get_evaluations()
-        assigned_grade = evaluations.get(uid, {}).get("assigned_grade")
-
-        if not assigned_grade:
-            st.info("아직 평가 등급이 확정되지 않았습니다. 평가 완료 후 총괄 관리자가 등급을 확정하면 여기서 확인하실 수 있습니다.")
-        else:
-            grade_colors = {"S":"#7D3C98","A":"#1F618D","B":"#1E8449","C":"#D68910","D":"#C0392B"}
-            color = grade_colors.get(assigned_grade, "#555")
-            st.markdown(
-                f"<div style='text-align:center;padding:2.5rem 1rem;border-radius:12px;"
-                f"background:{color}15;border:3px solid {color};max-width:300px;margin:2rem auto'>"
-                f"<div style='font-size:1rem;color:#555;margin-bottom:.5rem'>📋 최종 평가 등급</div>"
-                f"<div style='font-size:5rem;font-weight:bold;color:{color};line-height:1'>{assigned_grade}</div>"
-                f"<div style='font-size:.85rem;color:#777;margin-top:.5rem'>등급</div>"
-                f"</div>",
-                unsafe_allow_html=True
-            )
 
 # ══════════════════════════════════════════════════════════════
 # 평가자
@@ -773,8 +745,8 @@ def show_admin():
 
     st.divider()
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📋 전체 현황", "🧘 직무수행태도", "🏅 등급 확정", "🏆 직급별 순위", "🧑‍💼 계정 관리"
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📋 전체 현황", "🧘 직무수행태도", "🏆 직급별 순위", "🧑‍💼 계정 관리"
     ])
 
     # ── 탭1 전체 현황 ─────────────────────────
@@ -887,64 +859,10 @@ def show_admin():
                         })
                         st.success(f"✅ {u.get('name','')} 직무수행태도 저장 완료."); st.rerun()
 
-    # ── 탭3 등급 확정 ─────────────────────────
+    # ── 탭3 직급별 순위 ───────────────────────
     with tab3:
-        st.subheader("🏅 피평가자 최종 등급 확정")
-        st.caption("총괄 관리자가 직접 최종 등급을 지정합니다. 등급 확정 후 피평가자가 조회 가능합니다.")
-        st.divider()
-
-        GRADE_OPTIONS = ["미확정", "S", "A", "B", "C", "D"]
-        GRADE_COLORS  = {"S":"#7D3C98","A":"#1F618D","B":"#1E8449","C":"#D68910","D":"#C0392B","미확정":"#888"}
-        evaluations = get_evaluations()
-
-        for uid, u in evaluatees.items():
-            p    = profiles.get(uid, {})
-            team = p.get("team", u.get("team",""))
-            dept = get_team_dept(team)
-            ev   = evaluations.get(uid, {})
-            cur_grade   = ev.get("assigned_grade", "미확정")
-            grade_color = GRADE_COLORS.get(cur_grade, "#888")
-
-            col_info, col_score, col_grade = st.columns([3, 2, 2])
-            with col_info:
-                st.markdown(f"**{u.get('name','')}**")
-                st.caption(f"{dept} / {team} | {p.get('position', u.get('position',''))} ({p.get('grade', u.get('grade',''))})")
-            with col_score:
-                # 차수별 점수 요약
-                score_parts = []
-                for s in EVAL_WEIGHTS:
-                    sc = ev.get(s, {}).get("score")
-                    if sc is not None:
-                        score_parts.append(f"{s}: {sc}점")
-                if score_parts:
-                    st.caption(" | ".join(score_parts))
-                else:
-                    st.caption("평가 미완료")
-            with col_grade:
-                new_grade = st.selectbox(
-                    "최종 등급",
-                    GRADE_OPTIONS,
-                    index=GRADE_OPTIONS.index(cur_grade) if cur_grade in GRADE_OPTIONS else 0,
-                    key=f"grade_{uid}",
-                    label_visibility="collapsed"
-                )
-                if st.button("확정", key=f"gset_{uid}", type="primary" if new_grade != "미확정" else "secondary"):
-                    save_assigned_grade(uid, new_grade, st.session_state.username)
-                    st.success(f"✅ {u.get('name','')} → {new_grade}등급 확정"); st.rerun()
-
-            # 현재 확정 등급 표시
-            if cur_grade != "미확정":
-                st.markdown(
-                    f"<div style='display:inline-block;padding:.15rem .6rem;border-radius:12px;"
-                    f"background:{grade_color}20;border:1.5px solid {grade_color};"
-                    f"color:{grade_color};font-weight:bold;font-size:.9rem'>현재: {cur_grade}등급 확정</div>",
-                    unsafe_allow_html=True)
-            st.divider()
-
-    # ── 탭4 직급별 순위 ───────────────────────
-    with tab4:
         st.subheader("🏆 직급별 전사 통합 순위")
-        st.caption("4차 평가 + 직무수행태도까지 완료된 피평가자만 집계됩니다.")
+        st.caption("해당 직책 기준 모든 차수 평가 + 직무수행태도까지 완료된 피평가자만 집계됩니다.")
         df_rank = calc_grade_rankings(evaluations, tasks_data)
 
         if df_rank.empty:
@@ -954,23 +872,22 @@ def show_admin():
                 df_g = df_rank[df_rank["직급"]==grd].copy()
                 if df_g.empty: continue
                 st.markdown(f"### 📌 {grd} 순위")
-                disp = ["직급순위","이름","소속부","소속팀","직책",
-                        "최종점수","1차 점수","2차 점수","3차 점수","4차 점수","확정등급"]
-                disp = [c for c in disp if c in df_g.columns]
+                # 존재하는 환산 컬럼만 표시
+                base_cols = ["직급순위","이름","소속부","소속팀","직책","최종점수"]
+                stage_cols = [c for c in df_g.columns if "환산" in c]
+                disp = [c for c in base_cols + stage_cols if c in df_g.columns]
                 st.dataframe(df_g[disp].rename(columns={"직급순위":"순위"}),
                              use_container_width=True, hide_index=True)
                 st.divider()
 
-            all_cols = [c for c in ["직급","직급순위","이름","소속부","소속팀","직책",
-                                     "최종점수","1차 점수","2차 점수","3차 점수","4차 점수","확정등급"]
-                        if c in df_rank.columns]
+            all_cols = [c for c in df_rank.columns if c != "uid"]
             st.download_button("⬇️ 직급별 순위 CSV",
                                data=df_rank[all_cols].to_csv(index=False).encode("utf-8-sig"),
                                file_name=f"직급별순위_{datetime.now().strftime('%Y%m%d')}.csv",
                                mime="text/csv")
 
-    # ── 탭5 계정 관리 ─────────────────────────
-    with tab5:
+    # ── 탭4 계정 관리 ─────────────────────────
+    with tab4:
         st.subheader("🧑‍💼 계정·조직 관리")
         sub1, sub2, sub3 = st.tabs(["📥 엑셀 일괄 생성","✏️ 개별 계정 추가","📌 현재 계정 목록"])
 
