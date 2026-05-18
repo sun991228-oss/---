@@ -113,6 +113,7 @@ def score_color(s):
 # ══════════════════════════════════════════════
 # DB 데이터 접근 함수 (Supabase)
 # ══════════════════════════════════════════════
+@st.cache_data(ttl=30)
 def get_users() -> dict:
     sb = get_supabase()
     rows = sb.table("users").select("*").execute().data
@@ -121,12 +122,14 @@ def get_users() -> dict:
 def save_user(uid: str, data: dict):
     sb = get_supabase()
     sb.table("users").upsert({"uid": uid, **data}).execute()
+    get_users.clear()
 
 def delete_user(uid: str):
     sb = get_supabase()
     sb.table("users").delete().eq("uid", uid).execute()
-    # 연관 데이터 삭제 (CASCADE 설정으로 자동 처리)
+    get_users.clear()
 
+@st.cache_data(ttl=30)
 def get_profiles() -> dict:
     sb = get_supabase()
     rows = sb.table("profiles").select("*").execute().data
@@ -139,7 +142,6 @@ def get_profiles() -> dict:
             "현보직일":     r.get("current_pos_date", ""),
             "담당업무":     r.get("work_summary", ""),
         }
-        # users 테이블의 조직 정보도 포함
     return result
 
 def save_profile(uid: str, p: dict):
@@ -152,7 +154,9 @@ def save_profile(uid: str, p: dict):
         "work_summary":       p.get("담당업무", ""),
         "updated_at":         datetime.now().isoformat(),
     }).execute()
+    get_profiles.clear()
 
+@st.cache_data(ttl=30)
 def get_tasks() -> dict:
     sb = get_supabase()
     rows = sb.table("tasks").select("*").execute().data
@@ -166,18 +170,10 @@ def save_tasks(uid: str, tasks_list: list):
         "tasks_json": tasks_list,
         "updated_at": datetime.now().isoformat(),
     }).execute()
+    get_tasks.clear()
 
+@st.cache_data(ttl=30)
 def get_evaluations() -> dict:
-    """
-    반환 형태: {
-      ee_uid: {
-        "1차": {...}, "2차": {...}, ...,
-        "deductions": {...},
-        "assigned_grade": "A",
-        ...
-      }
-    }
-    """
     sb = get_supabase()
     ev_rows = sb.table("evaluations").select("*").execute().data
     gr_rows = sb.table("assigned_grades").select("*").execute().data
@@ -197,7 +193,6 @@ def get_evaluations() -> dict:
     return result
 
 def save_evaluation(uid: str, stage: str, data: dict):
-    """1차~4차 또는 deductions 저장"""
     sb = get_supabase()
     sb.table("evaluations").upsert({
         "uid":        uid,
@@ -205,6 +200,7 @@ def save_evaluation(uid: str, stage: str, data: dict):
         "data_json":  data,
         "updated_at": datetime.now().isoformat(),
     }).execute()
+    get_evaluations.clear()
 
 def save_assigned_grade(uid: str, grade: str, assigned_by: str):
     sb = get_supabase()
@@ -214,6 +210,7 @@ def save_assigned_grade(uid: str, grade: str, assigned_by: str):
         "assigned_by": assigned_by,
         "assigned_at": datetime.now().isoformat(),
     }).execute()
+    get_evaluations.clear()
 
 def get_evaluatees() -> dict:
     return {k: v for k, v in get_users().items() if v.get("role") == "evaluatee"}
@@ -244,8 +241,18 @@ def get_pdf_url(uid: str) -> str | None:
         pass
     return None
 
+@st.cache_data(ttl=60)
+def get_pdf_names() -> set:
+    """Storage에 있는 PDF 파일명 목록을 한 번에 가져옴"""
+    sb = get_supabase()
+    try:
+        files = sb.storage.from_(BUCKET).list()
+        return {f["name"] for f in files}
+    except Exception:
+        return set()
+
 def pdf_exists(uid: str) -> bool:
-    return get_pdf_url(uid) is not None
+    return f"{uid}.pdf" in get_pdf_names()
 
 def delete_pdf(uid: str):
     sb = get_supabase()
@@ -253,6 +260,7 @@ def delete_pdf(uid: str):
         sb.storage.from_(BUCKET).remove([f"{uid}.pdf"])
     except Exception:
         pass
+    get_pdf_names.clear()
 
 def reset_evaluation(uid: str):
     """피평가자의 모든 평가 데이터 초기화 (과제·인적사항·평가·등급)"""
@@ -274,6 +282,10 @@ def reset_evaluation(uid: str):
     except Exception:
         pass
     delete_pdf(uid)
+    get_users.clear()
+    get_evaluations.clear()
+    get_tasks.clear()
+    get_profiles.clear()
 
 
 # ══════════════════════════════════════════════
@@ -850,7 +862,6 @@ def show_admin():
         st.subheader("🧘 직무수행태도 (C, 5점) 입력")
         st.caption("감점 항목 건수 입력 → 5점에서 자동 차감")
         st.divider()
-        evaluations = get_evaluations()
         for uid, u in evaluatees.items():
             p    = profiles.get(uid, {})
             team = p.get("team", u.get("team",""))
