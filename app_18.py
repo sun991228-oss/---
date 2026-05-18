@@ -408,7 +408,17 @@ def show_login():
             pw  = st.text_input("비밀번호", type="password")
             if st.button("로그인", type="primary", use_container_width=True):
                 users = get_users()
-                if uid in users and users[uid]["password"] == hash_pw(pw):
+                input_hash = hash_pw(pw)
+                db_hash = users.get(uid, {}).get("password", "없음")
+
+                # 디버그 (문제 해결 후 삭제)
+                with st.expander("🔍 디버그 정보"):
+                    st.code(f"입력 해시: {input_hash}")
+                    st.code(f"DB 해시:  {db_hash}")
+                    st.code(f"uid 존재: {uid in users}")
+                    st.code(f"일치여부: {input_hash == db_hash}")
+
+                if uid in users and db_hash == input_hash:
                     for k,v in [("logged_in",True),("username",uid),
                                  ("role",users[uid]["role"]),("name",users[uid]["name"])]:
                         st.session_state[k] = v
