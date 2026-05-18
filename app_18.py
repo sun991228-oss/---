@@ -832,10 +832,18 @@ def show_admin():
 
             st.divider()
             df_csv = pd.DataFrame(rows_csv)
-            st.download_button("⬇️ 전체 현황 CSV",
+            col_dl1, col_dl2 = st.columns(2)
+            col_dl1.download_button("⬇️ 전체 현황 CSV",
                                data=df_csv.to_csv(index=False).encode("utf-8-sig"),
                                file_name=f"평가현황_{datetime.now().strftime('%Y%m%d')}.csv",
                                mime="text/csv")
+            # 최종 집계표 엑셀
+            summary_bytes = generate_summary_excel(evaluations, tasks_data, users, profiles, evaluatees)
+            col_dl2.download_button("📊 최종 집계표 다운로드",
+                               data=summary_bytes,
+                               file_name=f"근무성적평정_결과집계표_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               type="primary")
 
     # ── 탭2 직무수행태도 ──────────────────────
     with tab2:
@@ -1144,6 +1152,222 @@ def show_admin():
             else:
                 st.caption("해당 계정 없음")
 
+
+
+# ══════════════════════════════════════════════════════════════
+# 최종 집계표 엑셀 생성
+# ══════════════════════════════════════════════════════════════
+def generate_summary_excel(evaluations, tasks_data, users, profiles, evaluatees) -> bytes:
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    GRADE_ORDER = ["2급","3급","4급","5급","6급","공무직"]
+    GRADE_BG    = {"2급":"E8F4FD","3급":"E8F4FD","4급":"E8F4FD",
+                   "5급":"FFF8E8","6급":"FFF0E8","공무직":"F0E8FF"}
+    GRADE_HDR   = {"2급":"1F4E79","3급":"1F4E79","4급":"1F4E79",
+                   "5급":"7B6000","6급":"833C00","공무직":"4B0082"}
+
+    def thin():
+        s = Side(style="thin", color="AAAAAA")
+        return Border(left=s, right=s, top=s, bottom=s)
+
+    def hc(ws, r, c, val, bg="1F4E79", fg="FFFFFF", bold=True, sz=9):
+        cell = ws.cell(row=r, column=c, value=val)
+        cell.font = Font(name="맑은 고딕", bold=bold, color=fg, size=sz)
+        cell.fill = PatternFill("solid", start_color=bg)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = thin()
+        return cell
+
+    def dc(ws, r, c, val, bg="FFFFFF", bold=False, sz=9, align_h="center"):
+        cell = ws.cell(row=r, column=c, value=val)
+        cell.font = Font(name="맑은 고딕", bold=bold, size=sz)
+        cell.fill = PatternFill("solid", start_color=bg)
+        cell.alignment = Alignment(horizontal=align_h, vertical="center", wrap_text=True)
+        cell.border = thin()
+        return cell
+
+    def mc(ws, r1, c1, r2, c2):
+        ws.merge_cells(start_row=r1, start_column=c1, end_row=r2, end_column=c2)
+
+    def fmt(v):
+        if isinstance(v, (int, float)):
+            return round(v, 2)
+        return "-"
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "최종집계"
+    ws.sheet_view.showGridLines = False
+
+    # 열 너비
+    widths = [4, 9, 7, 11, 10, 6, 8, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 5]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    # 타이틀
+    mc(ws,1,1,1,19)
+    hc(ws,1,1,f"■ {datetime.now().year}년 근무성적평정 결과집계표",
+       bg="FFFFFF", fg="1F4E79", bold=True, sz=13)
+    ws.row_dimensions[1].height = 26
+
+    # 헤더 3행 구조
+    for r in [2,3,4]: ws.row_dimensions[r].height = 22
+
+    # 고정 컬럼 (2~4행 병합)
+    for c, label in enumerate(["순번","성명","직급","소속부","소속팀","직책","비고"],1):
+        mc(ws,2,c,4,c); hc(ws,2,c,label,bg="1F4E79")
+
+    # 평가점수 그룹
+    mc(ws,2,8,2,11); hc(ws,2,8,"평가점수 (95점 만점)",bg="2E75B6")
+    for c,label in enumerate(["1차\n평가","2차\n평가","3차\n평가","4차\n평가"],8):
+        mc(ws,3,c,4,c); hc(ws,3,c,label,bg="2E75B6")
+
+    # 환산점수 그룹
+    mc(ws,2,12,2,15); hc(ws,2,12,"환산점수",bg="375623")
+    for c,label in enumerate(["1차\n환산","2차\n환산","3차\n환산","4차\n환산"],12):
+        mc(ws,3,c,4,c); hc(ws,3,c,label,bg="375623")
+
+    # 소계·태도·합계·순위
+    mc(ws,2,16,4,16); hc(ws,2,16,"소계\n(95점)",bg="C00000")
+    mc(ws,2,17,4,17); hc(ws,2,17,"직무수행\n태도(5점)",bg="C00000")
+    mc(ws,2,18,4,18); hc(ws,2,18,"계\n(100점)",bg="C00000")
+    mc(ws,2,19,4,19); hc(ws,2,19,"순위",bg="1F4E79")
+
+    # 데이터 수집 및 정렬
+    all_rows = []
+    for uid, u in evaluatees.items():
+        p       = profiles.get(uid, {})
+        ev      = evaluations.get(uid, {})
+        ee_pos  = p.get("position", u.get("position","팀원"))
+        ee_grd  = p.get("grade", u.get("grade",""))
+        ee_stages = get_stage_order_for_ee(ee_pos)
+        ee_weights= get_eval_weights_for_ee(ee_pos)
+        tasks   = tasks_data.get(uid, {}).get("tasks", [])
+
+        # 차수별 점수 (A+B 소계 기준 95점 환산)
+        stage_scores = {}
+        for st_ in ["1차","2차","3차","4차"]:
+            ev_st = ev.get(st_, {})
+            if ev_st:
+                a = calc_task_score(tasks, ev_st)
+                b = calc_ability_score(ev_st)
+                stage_scores[st_] = round(a + b, 2)  # 95점 만점
+
+        # 환산점수 (비중 적용)
+        stage_conv = {}
+        for st_ in ee_stages:
+            sc = stage_scores.get(st_)
+            if sc is not None:
+                stage_conv[st_] = round(sc * ee_weights[st_], 2)
+
+        subtotal  = round(sum(stage_conv.values()), 2) if stage_conv else None
+        deductions= ev.get("deductions", {})
+        attitude  = calc_attitude_score(deductions) if ev.get("deductions") is not None else None
+        total     = round(subtotal + (attitude or 0), 2) if subtotal is not None else None
+
+        all_rows.append({
+            "uid":      uid,
+            "name":     u.get("name",""),
+            "grade":    ee_grd,
+            "dept":     get_team_dept(p.get("team", u.get("team",""))),
+            "team":     p.get("team", u.get("team","")),
+            "position": ee_pos,
+            "s1": stage_scores.get("1차"), "s2": stage_scores.get("2차"),
+            "s3": stage_scores.get("3차"), "s4": stage_scores.get("4차"),
+            "e1": stage_conv.get("1차"),  "e2": stage_conv.get("2차"),
+            "e3": stage_conv.get("3차"),  "e4": stage_conv.get("4차"),
+            "subtotal": subtotal,
+            "attitude": attitude,
+            "total":    total,
+        })
+
+    # 직급별 순위 계산
+    from collections import defaultdict
+    by_grade = defaultdict(list)
+    for r in all_rows:
+        by_grade[r["grade"]].append(r)
+
+    for grd, grp in by_grade.items():
+        completed = [r for r in grp if r["total"] is not None]
+        completed_sorted = sorted(completed, key=lambda x: x["total"], reverse=True)
+        rank = 1
+        prev_score = None
+        for i, r in enumerate(completed_sorted):
+            if r["total"] != prev_score:
+                rank = i + 1
+            r["rank"] = rank
+            prev_score = r["total"]
+        for r in grp:
+            if r.get("rank") is None:
+                r["rank"] = "-"
+
+    # 정렬: 상위직급부터 → 직급별 순위
+    def sort_key(r):
+        g = r.get("grade","공무직")
+        idx = GRADE_ORDER.index(g) if g in GRADE_ORDER else 99
+        rank = r.get("rank", 99)
+        return (idx, rank if isinstance(rank, int) else 99)
+
+    all_rows.sort(key=sort_key)
+
+    # 데이터 작성
+    data_row = 5
+    prev_grade = None
+    grade_no = {}
+
+    for r in all_rows:
+        g   = r.get("grade","공무직")
+        bg  = GRADE_BG.get(g, "FFFFFF")
+        hbg = GRADE_HDR.get(g, "333333")
+
+        if g != prev_grade:
+            mc(ws, data_row, 1, data_row, 19)
+            hc(ws, data_row, 1, f"▶  {g}", bg=hbg, sz=9)
+            ws.row_dimensions[data_row].height = 16
+            data_row += 1
+            prev_grade = g
+            grade_no[g] = 1
+
+        no = grade_no.get(g, 1); grade_no[g] = no + 1
+
+        dc(ws, data_row, 1,  no,                    bg=bg)
+        dc(ws, data_row, 2,  r.get("name",""),       bg=bg, bold=True)
+        dc(ws, data_row, 3,  g,                      bg=bg)
+        dc(ws, data_row, 4,  r.get("dept",""),       bg=bg, align_h="left")
+        dc(ws, data_row, 5,  r.get("team",""),       bg=bg, align_h="left")
+        dc(ws, data_row, 6,  r.get("position",""),   bg=bg)
+        dc(ws, data_row, 7,  "",                     bg="FFFDE7")  # 비고(수기)
+
+        for c, key in enumerate(["s1","s2","s3","s4"], 8):
+            v = r.get(key)
+            dc(ws, data_row, c, fmt(v),
+               bg="EBF3FB" if v is not None else "F5F5F5")
+
+        for c, key in enumerate(["e1","e2","e3","e4"], 12):
+            v = r.get(key)
+            dc(ws, data_row, c, fmt(v),
+               bg="E8F5E9" if v is not None else "F5F5F5")
+
+        dc(ws, data_row, 16, fmt(r.get("subtotal")), bg="FFF2CC", bold=True)
+        dc(ws, data_row, 17, fmt(r.get("attitude")), bg="FFF2CC")
+        dc(ws, data_row, 18, fmt(r.get("total")),    bg="FFD700", bold=True)
+        dc(ws, data_row, 19, r.get("rank","-"),      bg="E8D5F5", bold=True)
+
+        ws.row_dimensions[data_row].height = 18
+        data_row += 1
+
+    # 합계 행
+    mc(ws, data_row, 1, data_row, 7)
+    hc(ws, data_row, 1, f"총  {len(all_rows)}명", bg="D6E4F0", fg="1F4E79", sz=10)
+    for c in range(8, 20):
+        dc(ws, data_row, c, "", bg="D6E4F0")
+    ws.row_dimensions[data_row].height = 20
+
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
 
 
 # ══════════════════════════════════════════════════════════════
