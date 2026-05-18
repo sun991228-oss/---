@@ -254,6 +254,27 @@ def delete_pdf(uid: str):
     except Exception:
         pass
 
+def reset_evaluation(uid: str):
+    """피평가자의 모든 평가 데이터 초기화 (과제·인적사항·평가·등급)"""
+    sb = get_supabase()
+    try:
+        sb.table("evaluations").delete().eq("uid", uid).execute()
+    except Exception:
+        pass
+    try:
+        sb.table("assigned_grades").delete().eq("uid", uid).execute()
+    except Exception:
+        pass
+    try:
+        sb.table("tasks").delete().eq("uid", uid).execute()
+    except Exception:
+        pass
+    try:
+        sb.table("profiles").delete().eq("uid", uid).execute()
+    except Exception:
+        pass
+    delete_pdf(uid)
+
 
 # ══════════════════════════════════════════════
 # 조직 기반 평가 범위
@@ -1009,6 +1030,8 @@ def show_admin():
             # 삭제 확인 상태 관리
             if "delete_confirm" not in st.session_state:
                 st.session_state.delete_confirm = None
+            if "reset_confirm" not in st.session_state:
+                st.session_state.reset_confirm = None
 
             # 삭제 확인 팝업
             if st.session_state.delete_confirm:
@@ -1017,7 +1040,6 @@ def show_admin():
                 st.warning(f"⚠️ **'{del_name}' ({del_uid})** 계정을 삭제하시겠습니까?\n\n관련 평가 데이터·과제·인적사항도 함께 삭제됩니다.")
                 cc1, cc2, _ = st.columns([1, 1, 3])
                 if cc1.button("🗑️ 삭제 확정", type="primary", key="confirm_del"):
-                    # Supabase CASCADE로 연관 데이터 자동 삭제
                     delete_user(del_uid)
                     delete_pdf(del_uid)
                     st.session_state.delete_confirm = None
@@ -1028,7 +1050,26 @@ def show_admin():
                     st.rerun()
                 st.divider()
 
-            # 부별 계정 목록 + 삭제 버튼
+            # 초기화 확인 팝업
+            if st.session_state.reset_confirm:
+                rst_uid  = st.session_state.reset_confirm
+                rst_name = all_u.get(rst_uid, {}).get("name", rst_uid)
+                st.warning(
+                    f"⚠️ **'{rst_name}' ({rst_uid})** 의 평가를 초기화하시겠습니까?\n\n"
+                    f"인적사항·담당과제·평가점수·등급이 모두 삭제됩니다. 계정은 유지됩니다."
+                )
+                rc1, rc2, _ = st.columns([1, 1, 3])
+                if rc1.button("🔄 초기화 확정", type="primary", key="confirm_reset"):
+                    reset_evaluation(rst_uid)
+                    st.session_state.reset_confirm = None
+                    st.success(f"✅ '{rst_name}' 의 평가 데이터가 초기화되었습니다.")
+                    st.rerun()
+                if rc2.button("취소", key="cancel_reset"):
+                    st.session_state.reset_confirm = None
+                    st.rerun()
+                st.divider()
+
+            # 부별 계정 목록 + 삭제·초기화 버튼
             for dept, teams in ORG.items():
                 st.markdown(f"#### 🏢 {dept}")
                 dept_rows = []
@@ -1044,21 +1085,25 @@ def show_admin():
                     continue
 
                 # 헤더
-                hc = st.columns([1.5, 2, 1.5, 1.5, 1.5, 2, 1])
-                for h, label in zip(hc, ["아이디","이름","역할","직책","직급","소속팀","삭제"]):
+                hc = st.columns([1.5, 2, 1.5, 1.5, 1.5, 2, 1, 1])
+                for h, label in zip(hc, ["아이디","이름","역할","직책","직급","소속팀","초기화","삭제"]):
                     h.markdown(f"**{label}**")
                 st.divider()
 
                 for uid, u, p, team in dept_rows:
                     role_str = "피평가자" if u["role"] == "evaluatee" else "평가자"
-                    rc = st.columns([1.5, 2, 1.5, 1.5, 1.5, 2, 1])
+                    rc = st.columns([1.5, 2, 1.5, 1.5, 1.5, 2, 1, 1])
                     rc[0].caption(uid)
                     rc[1].markdown(u.get("name", ""))
                     rc[2].caption(role_str)
                     rc[3].caption(p.get("position", u.get("position", "")))
                     rc[4].caption(p.get("grade", u.get("grade", "")))
                     rc[5].caption(team)
-                    if rc[6].button("🗑️", key=f"del_{uid}",
+                    if rc[6].button("🔄", key=f"rst_{uid}",
+                                    help=f"{u.get('name','')} 평가 초기화"):
+                        st.session_state.reset_confirm = uid
+                        st.rerun()
+                    if rc[7].button("🗑️", key=f"del_{uid}",
                                     help=f"{u.get('name','')} 계정 삭제"):
                         st.session_state.delete_confirm = uid
                         st.rerun()
@@ -1071,25 +1116,28 @@ def show_admin():
                 p    = all_p.get(uid, {})
                 team = p.get("team", u.get("team", ""))
                 pos  = p.get("position", u.get("position", ""))
-                # 조직도에 소속되지 않은 경우 (팀이 비어있거나 인식 불가)
                 if pos in ("대표이사", "본부장") or get_team_dept(team) == "":
                     etc_rows.append((uid, u, p, team))
 
             if etc_rows:
-                hc = st.columns([1.5, 2, 1.5, 1.5, 1.5, 2, 1])
-                for h, label in zip(hc, ["아이디","이름","역할","직책","직급","소속팀","삭제"]):
+                hc = st.columns([1.5, 2, 1.5, 1.5, 1.5, 2, 1, 1])
+                for h, label in zip(hc, ["아이디","이름","역할","직책","직급","소속팀","초기화","삭제"]):
                     h.markdown(f"**{label}**")
                 st.divider()
                 for uid, u, p, team in etc_rows:
                     role_str = "피평가자" if u["role"] == "evaluatee" else "평가자"
-                    rc = st.columns([1.5, 2, 1.5, 1.5, 1.5, 2, 1])
+                    rc = st.columns([1.5, 2, 1.5, 1.5, 1.5, 2, 1, 1])
                     rc[0].caption(uid)
                     rc[1].markdown(u.get("name", ""))
                     rc[2].caption(role_str)
                     rc[3].caption(p.get("position", u.get("position", "")))
                     rc[4].caption(p.get("grade", u.get("grade", "")))
                     rc[5].caption(team if team else "-")
-                    if rc[6].button("🗑️", key=f"del_{uid}",
+                    if rc[6].button("🔄", key=f"rst_{uid}",
+                                    help=f"{u.get('name','')} 평가 초기화"):
+                        st.session_state.reset_confirm = uid
+                        st.rerun()
+                    if rc[7].button("🗑️", key=f"del_{uid}",
                                     help=f"{u.get('name','')} 계정 삭제"):
                         st.session_state.delete_confirm = uid
                         st.rerun()
