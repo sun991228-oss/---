@@ -1727,6 +1727,83 @@ def generate_eval_excel(ee_id, ee_info, evaluations, tasks_data):
         mc(row,1,row,2); hc(row,1,f"{st_}\n({stage_labels.get(st_,'')} {ev_nm})",bg="375623",sz=8)
         mc(row,3,row,10); dc(row,3,op,bg="FAFAFA"); ws.row_dimensions[row].height=26; row+=1
 
+    # ── 시트2: 근무성적평정서(참고자료) ─────────────────────────
+    sr = get_selfreport(ee_id)
+    ws2 = wb.create_sheet("참고자료(근무성적평정서)")
+    ws2.sheet_view.showGridLines = False
+
+    for i, w in enumerate([4, 60], 1):
+        ws2.column_dimensions[get_column_letter(i)].width = w
+
+    def hc2(r, val, bg="2E75B6", sz=11):
+        ws2.merge_cells(start_row=r, start_column=1, end_row=r, end_column=2)
+        c = ws2.cell(row=r, column=1, value=val)
+        c.font = Font(name="맑은 고딕", bold=True, color="FFFFFF", size=sz)
+        c.fill = PatternFill("solid", start_color=bg)
+        c.alignment = Alignment(horizontal="left", vertical="center")
+        c.border = bdr
+        ws2.row_dimensions[r].height = 24
+
+    def dc2(r, label, value, bg_label="D6E4F0", bg_val="FFFFFF"):
+        c1 = ws2.cell(row=r, column=1, value=label)
+        c1.font = Font(name="맑은 고딕", bold=True, size=9)
+        c1.fill = PatternFill("solid", start_color=bg_label)
+        c1.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+        c1.border = bdr
+        c2 = ws2.cell(row=r, column=2, value=value)
+        c2.font = Font(name="맑은 고딕", size=10)
+        c2.fill = PatternFill("solid", start_color=bg_val)
+        c2.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+        c2.border = bdr
+
+    # 타이틀
+    ws2.merge_cells("A1:B1")
+    t2 = ws2["A1"]
+    t2.value = f"근무성적평정서 — {ee_info.get('name','')} ({p.get('grade','')} / {p.get('position','')})"
+    t2.font = Font(name="맑은 고딕", bold=True, size=14, color="1F4E79")
+    t2.fill = PatternFill("solid", start_color="D6E4F0")
+    t2.alignment = Alignment(horizontal="left", vertical="center")
+    ws2.row_dimensions[1].height = 32
+
+    sr_row = 2
+
+    # 자기계발 사항
+    hc2(sr_row, "□ 자기계발 사항"); sr_row += 1
+    dc2(sr_row, "1. 올해 교육연수를\n받거나 연구한 사항", sr.get("dev1","(미작성)"))
+    ws2.row_dimensions[sr_row].height = max(80, len(sr.get("dev1","")) // 2 + 40)
+    sr_row += 1
+    dc2(sr_row, "2. 차기년도 희망\n교육연수 사항", sr.get("dev2","(미작성)"))
+    ws2.row_dimensions[sr_row].height = max(80, len(sr.get("dev2","")) // 2 + 40)
+    sr_row += 1
+
+    # 다음연도 업무목표
+    hc2(sr_row, "□ 다음연도 고과평가 대상 기간 중 추진하고자 하는 업무목표 (5개 이내)")
+    sr_row += 1
+    goals = sr.get("goals", [])
+    for i, g in enumerate(goals, 1):
+        if g:
+            dc2(sr_row, f"목표 {i}", g)
+            ws2.row_dimensions[sr_row].height = max(30, len(g) // 3 + 20)
+            sr_row += 1
+    if not any(goals):
+        dc2(sr_row, "업무목표", "(미작성)")
+        ws2.row_dimensions[sr_row].height = 30
+        sr_row += 1
+
+    # 희망부서 및 건의사항
+    hc2(sr_row, "□ 희망부서 및 건의사항"); sr_row += 1
+    dc2(sr_row, "희망부서 및\n건의사항", sr.get("suggestion","(미작성)"))
+    ws2.row_dimensions[sr_row].height = max(80, len(sr.get("suggestion","")) // 2 + 40)
+    sr_row += 1
+
+    # 작성일
+    ws2.merge_cells(f"A{sr_row}:B{sr_row}")
+    c = ws2.cell(row=sr_row, column=1,
+                 value=f"작성일: {sr.get('updated_at','미작성')}")
+    c.font = Font(name="맑은 고딕", size=9, color="888888", italic=True)
+    c.alignment = Alignment(horizontal="right", vertical="center")
+    ws2.row_dimensions[sr_row].height = 20
+
     out=io.BytesIO(); wb.save(out); return out.getvalue()
 
 
