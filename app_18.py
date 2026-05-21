@@ -287,6 +287,34 @@ def reset_evaluation(uid: str):
     get_tasks.clear()
     get_profiles.clear()
 
+def get_selfreport(uid: str) -> dict:
+    sb = get_supabase()
+    try:
+        rows = sb.table("selfreports").select("*").eq("uid", uid).execute().data
+        if rows:
+            r = rows[0]
+            return {
+                "dev1":       r.get("dev1", ""),
+                "dev2":       r.get("dev2", ""),
+                "goals":      r.get("goals_json", ["","","","",""]),
+                "suggestion": r.get("suggestion", ""),
+                "updated_at": r.get("updated_at", ""),
+            }
+    except Exception:
+        pass
+    return {"dev1":"","dev2":"","goals":["","","","",""],"suggestion":"","updated_at":""}
+
+def save_selfreport(uid: str, data: dict):
+    sb = get_supabase()
+    sb.table("selfreports").upsert({
+        "uid":         uid,
+        "dev1":        data.get("dev1",""),
+        "dev2":        data.get("dev2",""),
+        "goals_json":  data.get("goals",[]),
+        "suggestion":  data.get("suggestion",""),
+        "updated_at":  data.get("updated_at", datetime.now().isoformat()),
+    }).execute()
+
 
 # ══════════════════════════════════════════════
 # 조직 기반 평가 범위
@@ -468,7 +496,7 @@ def show_evaluatee():
     st.caption(f"👤 {name} | {dept} {team} | {pos} ({grd})")
     st.divider()
 
-    t1, t2 = st.tabs(["👤 인적사항","📝 담당업무·과제"])
+    t1, t2, t3 = st.tabs(["👤 인적사항","📝 담당업무·과제","📋 근무성적평정서"])
 
     with t1:
         st.subheader("인적 사항")
@@ -532,6 +560,65 @@ def show_evaluatee():
             st.dataframe(pd.DataFrame([{"구분":t["type"],"번호":t["no"],"과제명":t["title"],
                                          "비중":f"{t['weight']:.0%}","주요실적":t.get("result","")}
                                         for t in my_tasks]), use_container_width=True, hide_index=True)
+
+    # ── 근무성적평정서 ────────────────────────
+    with t3:
+        st.subheader("📋 근무성적평정서 작성")
+        st.caption("평가자가 참고자료로 열람합니다. 작성 후 저장하세요.")
+
+        selfreport = get_selfreport(uid)
+
+        with st.form(f"selfreport_form_{uid}"):
+            st.markdown("#### □ 자기계발 사항")
+            dev1 = st.text_area(
+                "1. 자기계발 및 경력관리를 위해 교육연수를 받거나 연구한 사항",
+                value=selfreport.get("dev1",""),
+                height=120,
+                placeholder="올해 이수한 교육, 자격증 취득, 연구 내용 등을 기술하세요.",
+            )
+            dev2 = st.text_area(
+                "2. 차기년도 자기계발 및 경력관리를 위해 교육연수를 받거나 연구하고 싶은 사항",
+                value=selfreport.get("dev2",""),
+                height=120,
+                placeholder="내년도 희망 교육연수, 취득하고 싶은 자격증 등을 기술하세요.",
+            )
+
+            st.divider()
+            st.markdown("#### □ 다음연도 고과평가 대상 기간 중 추진하고자 하는 업무목표")
+            st.caption("5개 이내의 주요 업무목표를 설정하세요.")
+            goals = []
+            prev_goals = selfreport.get("goals", ["","","","",""])
+            if len(prev_goals) < 5:
+                prev_goals += [""] * (5 - len(prev_goals))
+            for i in range(5):
+                g = st.text_input(f"업무목표 {i+1}", value=prev_goals[i],
+                                  key=f"sr_goal_{uid}_{i}",
+                                  placeholder=f"업무목표 {i+1}을 입력하세요.")
+                goals.append(g)
+
+            st.divider()
+            st.markdown("#### □ 희망부서 및 건의사항")
+            st.caption("기타 인사상의 건의, 요망사항(희망부서 등)을 기술하세요.")
+            suggestion = st.text_area(
+                "희망부서 및 건의사항",
+                value=selfreport.get("suggestion",""),
+                height=120,
+                placeholder="희망 부서, 인사 관련 건의사항 등을 자유롭게 기술하세요.",
+                label_visibility="collapsed",
+            )
+
+            if st.form_submit_button("💾 저장", type="primary", use_container_width=True):
+                save_selfreport(uid, {
+                    "dev1": dev1, "dev2": dev2,
+                    "goals": goals, "suggestion": suggestion,
+                    "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                })
+                st.success("✅ 근무성적평정서가 저장되었습니다.")
+                st.rerun()
+
+        # 저장일시 표시
+        if selfreport.get("updated_at"):
+            st.caption(f"마지막 저장: {selfreport.get('updated_at','')}")
 
 
 # ══════════════════════════════════════════════════════════════
@@ -655,6 +742,29 @@ def show_evaluator():
                                          use_container_width=True, hide_index=True)
                         else:
                             st.caption("등록된 과제가 없습니다.")
+
+                    # 근무성적평정서 참고자료
+                    sr = get_selfreport(ee_id)
+                    if any([sr.get("dev1"), sr.get("dev2"),
+                            any(sr.get("goals",[])), sr.get("suggestion")]):
+                        with st.expander("📋 근무성적평정서 참고자료 보기", expanded=False):
+                            if sr.get("dev1"):
+                                st.markdown("**자기계발 1. 올해 교육연수**")
+                                st.info(sr["dev1"])
+                            if sr.get("dev2"):
+                                st.markdown("**자기계발 2. 내년도 희망 교육연수**")
+                                st.info(sr["dev2"])
+                            goals = [g for g in sr.get("goals",[]) if g]
+                            if goals:
+                                st.markdown("**다음연도 업무목표**")
+                                for i, g in enumerate(goals, 1):
+                                    st.markdown(f"{i}. {g}")
+                            if sr.get("suggestion"):
+                                st.markdown("**희망부서 및 건의사항**")
+                                st.info(sr["suggestion"])
+                            st.caption(f"작성일: {sr.get('updated_at','')}")
+                    else:
+                        st.caption("📋 근무성적평정서 미작성")
                     with st.form(f"eval_{stage}_{ee_id}"):
 
                         # ① 근무실적 평정 (A, 60점)
