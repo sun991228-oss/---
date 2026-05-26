@@ -496,7 +496,7 @@ def show_evaluatee():
     st.caption(f"👤 {name} | {dept} {team} | {pos} ({grd})")
     st.divider()
 
-    t1, t2, t3 = st.tabs(["👤 인적사항","📝 담당업무·과제","📋 근무성적평정서"])
+    t1, t2, t3 = st.tabs(["👤 인적사항","📝 담당업무·과제","📋 평가 참고자료 입력"])
 
     with t1:
         st.subheader("인적 사항")
@@ -557,13 +557,26 @@ def show_evaluatee():
                     st.success("저장되었습니다."); st.rerun()
         if my_tasks:
             st.divider()
-            st.dataframe(pd.DataFrame([{"구분":t["type"],"번호":t["no"],"과제명":t["title"],
-                                         "비중":f"{t['weight']:.0%}","주요실적":t.get("result","")}
-                                        for t in my_tasks]), use_container_width=True, hide_index=True)
+            hrow = st.columns([1, 1, 3, 1, 5])
+            hrow[0].markdown("**구분**"); hrow[1].markdown("**번호**")
+            hrow[2].markdown("**과제명**"); hrow[3].markdown("**비중**")
+            hrow[4].markdown("**주요실적**")
+            st.divider()
+            for t in my_tasks:
+                trow = st.columns([1, 1, 3, 1, 5])
+                trow[0].caption("🔹개별" if t["type"]=="개별" else "🔸팀별")
+                trow[1].caption(str(t["no"]))
+                trow[2].markdown(t["title"])
+                trow[3].caption(f"{t['weight']:.0%}")
+                result_html = t.get("result","").replace("\n","<br>")
+                trow[4].markdown(
+                    f"<div style='font-size:0.85rem;line-height:1.5'>{result_html}</div>",
+                    unsafe_allow_html=True
+                )
 
-    # ── 근무성적평정서 ────────────────────────
+    # ── 평가 참고자료 입력 ────────────────────
     with t3:
-        st.subheader("📋 근무성적평정서 작성")
+        st.subheader("📋 평가 참고자료 입력")
         st.caption("평가자가 참고자료로 열람합니다. 작성 후 저장하세요.")
 
         selfreport = get_selfreport(uid)
@@ -613,7 +626,7 @@ def show_evaluatee():
                     "goals": goals, "suggestion": suggestion,
                     "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 })
-                st.success("✅ 근무성적평정서가 저장되었습니다.")
+                st.success("✅ 평가 참고자료가 저장되었습니다.")
                 st.rerun()
 
         # 저장일시 표시
@@ -735,11 +748,24 @@ def show_evaluator():
                     col_info = st.container()
                     with col_info:
                         if tasks:
-                            st.dataframe(pd.DataFrame([{"구분":t["type"],"과제명":t["title"],
-                                                         "비중":f"{t['weight']:.0%}",
-                                                         "주요실적":t.get("result","")}
-                                                        for t in tasks]),
-                                         use_container_width=True, hide_index=True)
+                            # 헤더
+                            hrow = st.columns([1, 3, 1, 5])
+                            hrow[0].markdown("**구분**")
+                            hrow[1].markdown("**과제명**")
+                            hrow[2].markdown("**비중**")
+                            hrow[3].markdown("**주요실적**")
+                            st.divider()
+                            for t in tasks:
+                                trow = st.columns([1, 3, 1, 5])
+                                trow[0].caption("🔹개별" if t["type"]=="개별" else "🔸팀별")
+                                trow[1].markdown(t["title"])
+                                trow[2].caption(f"{t['weight']:.0%}")
+                                # 줄바꿈 보존: \n → <br>
+                                result_html = t.get("result","").replace("\n","<br>")
+                                trow[3].markdown(
+                                    f"<div style='font-size:0.85rem;line-height:1.5'>{result_html}</div>",
+                                    unsafe_allow_html=True
+                                )
                         else:
                             st.caption("등록된 과제가 없습니다.")
 
@@ -747,7 +773,7 @@ def show_evaluator():
                     sr = get_selfreport(ee_id)
                     if any([sr.get("dev1"), sr.get("dev2"),
                             any(sr.get("goals",[])), sr.get("suggestion")]):
-                        with st.expander("📋 근무성적평정서 참고자료 보기", expanded=False):
+                        with st.expander("📋 평가 참고자료 보기", expanded=False):
                             if sr.get("dev1"):
                                 st.markdown("**자기계발 1. 올해 교육연수**")
                                 st.info(sr["dev1"])
@@ -764,7 +790,7 @@ def show_evaluator():
                                 st.info(sr["suggestion"])
                             st.caption(f"작성일: {sr.get('updated_at','')}")
                     else:
-                        st.caption("📋 근무성적평정서 미작성")
+                        st.caption("📋 평가 참고자료 미작성")
                     with st.form(f"eval_{stage}_{ee_id}"):
 
                         # ① 근무실적 평정 (A, 60점)
