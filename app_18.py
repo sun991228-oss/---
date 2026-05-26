@@ -562,7 +562,7 @@ def show_evaluatee():
             hrow[2].markdown("**과제명**"); hrow[3].markdown("**비중**")
             hrow[4].markdown("**주요실적**")
             st.divider()
-            for t in my_tasks:
+            for i, t in enumerate(my_tasks):
                 trow = st.columns([1, 1, 3, 1, 5])
                 trow[0].caption("🔹개별" if t["type"]=="개별" else "🔸팀별")
                 trow[1].caption(str(t["no"]))
@@ -573,6 +573,8 @@ def show_evaluatee():
                     f"<div style='font-size:0.85rem;line-height:1.5'>{result_html}</div>",
                     unsafe_allow_html=True
                 )
+                if i < len(my_tasks) - 1:
+                    st.divider()
 
     # ── 평가 참고자료 입력 ────────────────────
     with t3:
@@ -755,7 +757,7 @@ def show_evaluator():
                             hrow[2].markdown("**비중**")
                             hrow[3].markdown("**주요실적**")
                             st.divider()
-                            for t in tasks:
+                            for i, t in enumerate(tasks):
                                 trow = st.columns([1, 3, 1, 5])
                                 trow[0].caption("🔹개별" if t["type"]=="개별" else "🔸팀별")
                                 trow[1].markdown(t["title"])
@@ -766,6 +768,8 @@ def show_evaluator():
                                     f"<div style='font-size:0.85rem;line-height:1.5'>{result_html}</div>",
                                     unsafe_allow_html=True
                                 )
+                                if i < len(tasks) - 1:
+                                    st.divider()
                         else:
                             st.caption("등록된 과제가 없습니다.")
 
