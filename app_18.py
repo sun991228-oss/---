@@ -496,20 +496,32 @@ def show_evaluatee():
     st.caption(f"👤 {name} | {dept} {team} | {pos} ({grd})")
     st.divider()
 
-    t1, t2, t3 = st.tabs(["👤 인적사항","📝 담당업무·과제","📋 평가 참고자료 입력"])
+    t1, t2, t3 = st.tabs(["📢 성과평가 안내","📝 담당업무·과제","📋 평가 참고자료 입력"])
 
     with t1:
-        st.subheader("인적 사항")
-        st.info(f"소속: **{dept} / {team}** | 직책: **{pos}** | 직급: **{grd}**\n\n*(조직 정보는 총괄 관리자가 관리합니다)*")
-        with st.form("profile_form"):
-            c1, c2 = st.columns(2)
-            ipsa     = c1.text_input("입사일",       value=p.get("입사일",""),       placeholder="예: 2020-03-02")
-            hyun_jik = c1.text_input("현직급임용일", value=p.get("현직급임용일",""), placeholder="예: 2023-01-01")
-            hyun_bo  = c1.text_input("현보직일",     value=p.get("현보직일",""),     placeholder="예: 2024-03-01")
-            damdan   = c2.text_input("담당업무(요약)",value=p.get("담당업무",""))
-            if st.form_submit_button("💾 저장", type="primary"):
-                save_profile(uid, {**p, "입사일":ipsa,"현직급임용일":hyun_jik,"현보직일":hyun_bo,"담당업무":damdan})
-                st.success("저장되었습니다.")
+        st.subheader("📢 성과평가 안내")
+        st.divider()
+
+        notices = [
+            ("📅 입력 기간",
+             "근무성적평정 입력 기간은 **5.27 ~ 5.31**이며, 입력 기간이 지나면 수정이 불가능합니다."),
+            ("🔐 비밀번호 변경",
+             "입력 전 **비밀번호를 반드시 변경** 후 이용 부탁드립니다.\n*(좌측 사이드바 → 🔑 비밀번호 변경)*"),
+            ("📋 팀별과제 작성 안내",
+             "팀별과제는 각 팀(지점) 별로 **통일해서 과제명을 작성**하시기 바라며, 주요실적은 팀별 과제 진행 중 **본인의 담당 업무를 중심으로** 작성하시기 바랍니다."),
+            ("📊 평가결과 공지",
+             "평가결과는 **그룹웨어 메일을 통해 전달**될 예정이며, 세부 점수는 공개되지 않습니다."),
+            ("📞 문의",
+             "시스템 사용 중 발생한 문제는 **044)860-8414 (조태양 주임)**으로 문의 부탁드립니다."),
+        ]
+
+        for i, (title, content) in enumerate(notices, 1):
+            with st.container(border=True):
+                st.markdown(f"**{i}. {title}**")
+                st.markdown(content)
+
+        st.divider()
+        st.info(f"소속: **{dept} / {team}** | 직책: **{pos}** | 직급: **{grd}**")
 
     with t2:
         st.subheader("담당업무·과제 등록")
