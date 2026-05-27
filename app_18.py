@@ -496,7 +496,7 @@ def show_evaluatee():
     st.caption(f"👤 {name} | {dept} {team} | {pos} ({grd})")
     st.divider()
 
-    t1, t2, t3 = st.tabs(["📢 성과평가 안내","📝 담당업무·과제","📋 평가 참고자료 입력"])
+    t1, t2, t3 = st.tabs(["📢 성과평가 안내","📝 담당업무·과제 입력","📋 평가 참고자료 입력"])
 
     with t1:
         st.subheader("📢 성과평가 안내")
