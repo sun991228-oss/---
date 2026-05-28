@@ -315,6 +315,36 @@ def save_selfreport(uid: str, data: dict):
         "updated_at":  data.get("updated_at", datetime.now().isoformat()),
     }).execute()
 
+@st.cache_data(ttl=60)
+def get_notices() -> list:
+    sb = get_supabase()
+    try:
+        return sb.table("notices").select("*").order("order_no").execute().data
+    except Exception:
+        return []
+
+def save_notice(notice_id: int, title: str, content: str):
+    sb = get_supabase()
+    sb.table("notices").update({
+        "title": title, "content": content,
+        "updated_at": datetime.now().isoformat(),
+    }).eq("id", notice_id).execute()
+    get_notices.clear()
+
+def add_notice(title: str, content: str, order_no: int):
+    sb = get_supabase()
+    sb.table("notices").insert({
+        "title": title, "content": content,
+        "order_no": order_no,
+        "updated_at": datetime.now().isoformat(),
+    }).execute()
+    get_notices.clear()
+
+def delete_notice(notice_id: int):
+    sb = get_supabase()
+    sb.table("notices").delete().eq("id", notice_id).execute()
+    get_notices.clear()
+
 
 # ══════════════════════════════════════════════
 # 조직 기반 평가 범위
@@ -501,25 +531,14 @@ def show_evaluatee():
     with t1:
         st.subheader("📢 성과평가 안내")
         st.divider()
-
-        notices = [
-            ("📅 입력 기간",
-             "근무성적평정 입력 기간은 **5.27 ~ 5.31**이며, 입력 기간이 지나면 수정이 불가능합니다."),
-            ("🔐 비밀번호 변경",
-             "입력 전 **비밀번호를 반드시 변경** 후 이용 부탁드립니다.\n*(좌측 사이드바 → 🔑 비밀번호 변경)*"),
-            ("📋 팀별과제 작성 안내",
-             "팀별과제는 각 팀(지점) 별로 **통일해서 과제명을 작성**하시기 바라며, 주요실적은 팀별 과제 진행 중 **본인의 담당 업무를 중심으로** 작성하시기 바랍니다."),
-            ("📊 평가결과 공지",
-             "평가결과는 **그룹웨어 메일을 통해 전달**될 예정이며, 세부 점수는 공개되지 않습니다."),
-            ("📞 문의",
-             "시스템 사용 중 발생한 문제는 **044)860-8414 (조태양 주임)**으로 문의 부탁드립니다."),
-        ]
-
-        for i, (title, content) in enumerate(notices, 1):
-            with st.container(border=True):
-                st.markdown(f"**{i}. {title}**")
-                st.markdown(content)
-
+        notices = get_notices()
+        if notices:
+            for i, n in enumerate(notices, 1):
+                with st.container(border=True):
+                    st.markdown(f"**{i}. {n['title']}**")
+                    st.markdown(n["content"])
+        else:
+            st.info("등록된 공지사항이 없습니다.")
         st.divider()
         st.info(f"소속: **{dept} / {team}** | 직책: **{pos}** | 직급: **{grd}**")
 
@@ -930,8 +949,8 @@ def show_admin():
 
     st.divider()
 
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "📋 전체 현황", "🧘 직무수행태도", "🏆 직급별 순위", "🧑‍💼 계정 관리"
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📋 전체 현황", "🧘 직무수행태도", "🏆 직급별 순위", "📢 공지 관리", "🧑‍💼 계정 관리"
     ])
 
     # ── 탭1 전체 현황 ─────────────────────────
@@ -1078,8 +1097,68 @@ def show_admin():
                                file_name=f"직급별순위_{datetime.now().strftime('%Y%m%d')}.csv",
                                mime="text/csv")
 
-    # ── 탭4 계정 관리 ─────────────────────────
+    # ── 탭4 공지 관리 ─────────────────────────
     with tab4:
+        st.subheader("📢 성과평가 안내 공지 관리")
+        st.caption("피평가자 화면의 '성과평가 안내' 탭 내용을 수정합니다.")
+        st.divider()
+
+        notices = get_notices()
+
+        # 기존 공지 수정
+        if notices:
+            st.markdown("**📝 기존 공지 수정·삭제**")
+            for n in notices:
+                with st.expander(f"**{n['order_no']}. {n['title']}**", expanded=False):
+                    with st.form(f"notice_edit_{n['id']}"):
+                        new_title   = st.text_input("제목", value=n["title"], key=f"nt_{n['id']}")
+                        new_content = st.text_area("내용 (마크다운 사용 가능)",
+                                                    value=n["content"], height=120,
+                                                    key=f"nc_{n['id']}")
+                        st.caption("**굵게**, *기울임*, `코드` 등 마크다운 문법 사용 가능")
+                        col_s, col_d, _ = st.columns([1, 1, 3])
+                        if col_s.form_submit_button("💾 저장", type="primary"):
+                            save_notice(n["id"], new_title, new_content)
+                            st.success("✅ 저장됐습니다.")
+                            st.rerun()
+                        if col_d.form_submit_button("🗑️ 삭제"):
+                            delete_notice(n["id"])
+                            st.success("삭제됐습니다.")
+                            st.rerun()
+
+        st.divider()
+
+        # 새 공지 추가
+        st.markdown("**➕ 새 공지 추가**")
+        with st.form("notice_add"):
+            add_title   = st.text_input("제목 (예: 📅 입력 기간)")
+            add_content = st.text_area("내용", height=100,
+                                        placeholder="내용을 입력하세요. **굵게** 등 마크다운 사용 가능")
+            add_order   = st.number_input("순서 번호", min_value=1,
+                                           value=len(notices)+1, step=1)
+            if st.form_submit_button("➕ 공지 추가", type="primary"):
+                if not add_title or not add_content:
+                    st.error("제목과 내용을 입력하세요.")
+                else:
+                    add_notice(add_title, add_content, add_order)
+                    st.success("✅ 공지가 추가됐습니다.")
+                    st.rerun()
+
+        st.divider()
+
+        # 현재 공지 미리보기
+        st.markdown("**👁️ 피평가자 화면 미리보기**")
+        cur_notices = get_notices()
+        if cur_notices:
+            for i, n in enumerate(cur_notices, 1):
+                with st.container(border=True):
+                    st.markdown(f"**{i}. {n['title']}**")
+                    st.markdown(n["content"])
+        else:
+            st.info("등록된 공지가 없습니다.")
+
+    # ── 탭5 계정 관리 ─────────────────────────
+    with tab5:
         st.subheader("🧑‍💼 계정·조직 관리")
         sub1, sub2, sub3 = st.tabs(["📥 엑셀 일괄 생성","✏️ 개별 계정 추가","📌 현재 계정 목록"])
 
