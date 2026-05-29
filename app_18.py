@@ -160,14 +160,18 @@ def save_profile(uid: str, p: dict):
 def get_tasks() -> dict:
     sb = get_supabase()
     rows = sb.table("tasks").select("*").execute().data
-    return {r["uid"]: {"tasks": r.get("tasks_json", []),
-                        "updated": r.get("updated_at", "")} for r in rows}
+    return {r["uid"]: {
+        "tasks":     r.get("tasks_json", []),
+        "work_desc": r.get("work_desc", ""),
+        "updated":   r.get("updated_at", ""),
+    } for r in rows}
 
-def save_tasks(uid: str, tasks_list: list):
+def save_tasks(uid: str, tasks_list: list, work_desc: str = ""):
     sb = get_supabase()
     sb.table("tasks").upsert({
         "uid":        uid,
         "tasks_json": tasks_list,
+        "work_desc":  work_desc,
         "updated_at": datetime.now().isoformat(),
     }).execute()
     get_tasks.clear()
@@ -547,7 +551,17 @@ def show_evaluatee():
         st.caption("개별과제(최대 5개, 비중 합계 90%) + 팀별과제(1개, 비중 10%) / 업무비중 합계 = 100%")
         tasks_data = get_tasks()
         my_tasks   = tasks_data.get(uid, {}).get("tasks", [])
+        prev_work  = tasks_data.get(uid, {}).get("work_desc", "")
         with st.form("task_form"):
+            st.markdown("**담당업무**")
+            work_desc = st.text_area(
+                "담당업무",
+                value=prev_work,
+                height=80,
+                placeholder="본인의 주요 담당업무를 간략하게 기술하세요. (예: 예산 편성 및 집행 관리, 계약 업무 등)",
+                label_visibility="collapsed",
+            )
+            st.divider()
             st.markdown("**개별과제**")
             indiv_prev = [t for t in my_tasks if t.get("type")=="개별"]
             team_prev  = next((t for t in my_tasks if t.get("type")=="팀별"), {})
@@ -584,10 +598,13 @@ def show_evaluatee():
                 elif not indiv_new:
                     st.error("과제를 최소 1개 입력하세요.")
                 else:
-                    save_tasks(uid, all_tasks)
+                    save_tasks(uid, all_tasks, work_desc)
                     st.success("저장되었습니다."); st.rerun()
         if my_tasks:
             st.divider()
+            if prev_work:
+                st.markdown(f"**담당업무:** {prev_work}")
+                st.divider()
             hrow = st.columns([1, 1, 3, 1, 5])
             hrow[0].markdown("**구분**"); hrow[1].markdown("**번호**")
             hrow[2].markdown("**과제명**"); hrow[3].markdown("**비중**")
@@ -780,6 +797,11 @@ def show_evaluator():
 
                     col_info = st.container()
                     with col_info:
+                        # 담당업무 표시
+                        work_desc_ev = tasks_data.get(ee_id, {}).get("work_desc", "")
+                        if work_desc_ev:
+                            st.markdown(f"**담당업무:** {work_desc_ev}")
+                            st.divider()
                         if tasks:
                             # 헤더
                             hrow = st.columns([1, 3, 1, 5])
