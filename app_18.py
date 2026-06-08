@@ -113,7 +113,7 @@ def score_color(s):
 # ══════════════════════════════════════════════
 # DB 데이터 접근 함수 (Supabase)
 # ══════════════════════════════════════════════
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=60)
 def get_users() -> dict:
     sb = get_supabase()
     rows = sb.table("users").select("*").execute().data
@@ -129,7 +129,7 @@ def delete_user(uid: str):
     sb.table("users").delete().eq("uid", uid).execute()
     get_users.clear()
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=60)
 def get_profiles() -> dict:
     sb = get_supabase()
     rows = sb.table("profiles").select("*").execute().data
@@ -176,7 +176,7 @@ def save_tasks(uid: str, tasks_list: list, work_desc: str = ""):
     }).execute()
     get_tasks.clear()
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=20)
 def get_evaluations() -> dict:
     sb = get_supabase()
     ev_rows = sb.table("evaluations").select("*").execute().data
@@ -348,6 +348,27 @@ def delete_notice(notice_id: int):
     sb = get_supabase()
     sb.table("notices").delete().eq("id", notice_id).execute()
     get_notices.clear()
+
+@st.cache_data(ttl=10)
+def get_eval_locked() -> bool:
+    """평가 입력 잠금 여부 반환"""
+    sb = get_supabase()
+    try:
+        rows = sb.table("system_settings").select("value").eq("key","eval_locked").execute().data
+        if rows:
+            return rows[0]["value"] == "true"
+    except Exception:
+        pass
+    return False
+
+def set_eval_locked(locked: bool):
+    sb = get_supabase()
+    sb.table("system_settings").upsert({
+        "key":        "eval_locked",
+        "value":      "true" if locked else "false",
+        "updated_at": datetime.now().isoformat(),
+    }).execute()
+    get_eval_locked.clear()
 
 
 # ══════════════════════════════════════════════
@@ -532,6 +553,8 @@ def show_evaluatee():
 
     t1, t2, t3 = st.tabs(["📢 성과평가 안내","📝 담당업무·과제 입력","📋 평가 참고자료 입력"])
 
+    eval_locked = get_eval_locked()
+
     with t1:
         st.subheader("📢 성과평가 안내")
         st.divider()
@@ -547,6 +570,9 @@ def show_evaluatee():
         st.info(f"소속: **{dept} / {team}** | 직책: **{pos}** | 직급: **{grd}**")
 
     with t2:
+        if eval_locked:
+            st.warning("🔒 평가 입력 기간이 종료되었습니다. 입력 및 수정이 불가합니다.")
+            st.stop()
         st.subheader("담당업무·과제 등록")
         st.caption("개별과제(최대 5개, 비중 합계 90%) + 팀별과제(1개, 비중 10%) / 업무비중 합계 = 100%")
         tasks_data = get_tasks()
@@ -626,6 +652,9 @@ def show_evaluatee():
 
     # ── 평가 참고자료 입력 ────────────────────
     with t3:
+        if eval_locked:
+            st.warning("🔒 평가 입력 기간이 종료되었습니다. 입력 및 수정이 불가합니다.")
+            st.stop()
         st.subheader("📋 평가 참고자료 입력")
         st.caption("평가자가 참고자료로 열람합니다. 작성 후 저장하세요.")
 
@@ -701,6 +730,7 @@ def show_evaluator():
     tasks_data  = get_tasks()
     evaluations = get_evaluations()
     profiles    = get_profiles()
+    users       = get_users()
     assigned    = get_evaluatee_scope(ev_uid)
 
     if not assigned:
@@ -953,13 +983,19 @@ def show_admin():
     profiles    = get_profiles()
     evaluatees  = get_evaluatees()
 
+    # 모든 피평가자 calc_final 한 번에 계산 (중복 호출 방지)
+    all_results = {uid: calc_final(uid, evaluations, tasks_data) for uid in evaluatees}
+
     total   = len(evaluatees)
-    pdf_ok  = sum(1 for u in evaluatees if pdf_exists(u))
+    pdf_names = get_pdf_names()  # Storage 1회 호출
+    pdf_ok  = sum(1 for u in evaluatees if f"{u}.pdf" in pdf_names)
     task_ok = sum(1 for u in evaluatees if tasks_data.get(u,{}).get("tasks"))
-    done_4  = sum(1 for u in evaluatees if evaluations.get(u,{}).get("4차"))
-    ded_ok  = sum(1 for u in evaluatees if evaluations.get(u,{}).get("deductions") is not None)
-    full_ok = sum(1 for u in evaluatees
-                  if calc_final(u, evaluations, tasks_data).get("종합",{}).get("완료"))
+    done_4  = sum(1 for u in evaluatees
+                  if evaluations.get(u,{}).get("4차"))
+    ded_ok  = sum(1 for u in evaluatees
+                  if evaluations.get(u,{}).get("deductions") is not None)
+    full_ok = sum(1 for u, r in all_results.items()
+                  if r.get("종합",{}).get("완료"))
 
     cols = st.columns(6)
     for c, (label, val) in zip(cols, [
@@ -994,46 +1030,47 @@ def show_admin():
         if not filtered:
             st.info("해당 조건의 피평가자가 없습니다.")
         else:
-            # 테이블 헤더
-            hcols = st.columns([2, 1.5, 1.5, 1, 1, 1, 1, 1, 1, 1, 1.2, 1.2])
-            for hc, label in zip(hcols, ["이름","소속부","소속팀","직책","직급",
-                                          "과제","1차","2차","3차","4차","태도","평정표"]):
-                hc.markdown(f"**{label}**")
-            st.divider()
-
+            # DataFrame으로 한 번에 표시 (렌더링 속도 개선)
             rows_csv = []
             for uid, u, p, team, dept in filtered:
-                ev   = evaluations.get(uid, {})
-                ag   = ev.get("assigned_grade", "-")
-                rc   = st.columns([2, 1.5, 1.5, 1, 1, 1, 1, 1, 1, 1, 1.2, 1.2])
-                rc[0].markdown(f"**{u.get('name','')}**")
-                rc[1].caption(dept)
-                rc[2].caption(team)
-                rc[3].caption(p.get("position",u.get("position","")))
-                rc[4].caption(p.get("grade",u.get("grade","")))
-                rc[5].caption("✅" if tasks_data.get(uid,{}).get("tasks") else "❌")
-                rc[6].caption("✅" if ev.get("1차") else "⏳")
-                rc[7].caption("✅" if ev.get("2차") else "⏳")
-                rc[8].caption("✅" if ev.get("3차") else "⏳")
-                rc[9].caption("✅" if ev.get("4차") else "⏳")
-                rc[10].caption("✅" if ev.get("deductions") is not None else "⏳")
-                xl_bytes = generate_eval_excel(uid, u, evaluations, tasks_data)
-                rc[11].download_button("⬇️", data=xl_bytes,
-                                       file_name=f"{u.get('name','')}_근무성적평정표.xlsx",
-                                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                       key=f"dl_{uid}")
+                ev = evaluations.get(uid, {})
                 rows_csv.append({
-                    "이름": u.get("name",""), "소속부": dept, "소속팀": team,
-                    "직책": p.get("position",u.get("position","")),
-                    "직급": p.get("grade",u.get("grade","")),
-                    "과제등록": "✅" if tasks_data.get(uid,{}).get("tasks") else "❌",
-                    "1차": "✅" if ev.get("1차") else "⏳",
-                    "2차": "✅" if ev.get("2차") else "⏳",
-                    "3차": "✅" if ev.get("3차") else "⏳",
-                    "4차": "✅" if ev.get("4차") else "⏳",
-                    "태도입력": "✅" if ev.get("deductions") is not None else "⏳",
-                    "확정등급": ag,
+                    "이름":    u.get("name",""),
+                    "소속부":  dept,
+                    "소속팀":  team,
+                    "직책":    p.get("position",u.get("position","")),
+                    "직급":    p.get("grade",u.get("grade","")),
+                    "과제":    "✅" if tasks_data.get(uid,{}).get("tasks") else "❌",
+                    "1차":     "✅" if ev.get("1차") else "⏳",
+                    "2차":     "✅" if ev.get("2차") else "⏳",
+                    "3차":     "✅" if ev.get("3차") else "⏳",
+                    "4차":     "✅" if ev.get("4차") else "⏳",
+                    "태도":    "✅" if ev.get("deductions") is not None else "⏳",
+                    "확정등급": ev.get("assigned_grade", "-"),
                 })
+
+            df_status = pd.DataFrame(rows_csv)
+            st.dataframe(df_status, use_container_width=True, hide_index=True)
+
+            st.divider()
+            # 평정표 다운로드 — 개인별 선택 다운로드 (매번 전체 생성 방지)
+            st.markdown("**⬇️ 개인별 평정표 다운로드**")
+            dl_names = ["선택하세요"] + [u.get("name","") + f" ({uid})"
+                                         for uid, u, p, team, dept in filtered]
+            dl_select = st.selectbox("직원 선택", dl_names, key="dl_select",
+                                     label_visibility="collapsed")
+            if dl_select != "선택하세요":
+                sel_uid = dl_select.split("(")[-1].rstrip(")")
+                sel_u   = users.get(sel_uid, {})
+                if sel_u:
+                    xl_bytes = generate_eval_excel(sel_uid, sel_u, evaluations, tasks_data)
+                    st.download_button(
+                        f"⬇️ {sel_u.get('name','')} 평정표 다운로드",
+                        data=xl_bytes,
+                        file_name=f"{sel_u.get('name','')}_근무성적평정표.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        type="primary",
+                    )
 
             st.divider()
             df_csv = pd.DataFrame(rows_csv)
@@ -1122,6 +1159,28 @@ def show_admin():
     # ── 탭4 공지 관리 ─────────────────────────
     with tab4:
         st.subheader("📢 성과평가 안내 공지 관리")
+
+        # 평가 잠금 토글
+        with st.container(border=True):
+            is_locked = get_eval_locked()
+            col_l, col_r = st.columns([3, 1])
+            with col_l:
+                st.markdown("**🔒 피평가자 입력 잠금**")
+                if is_locked:
+                    st.error("현재 상태: **잠금** — 피평가자가 과제·참고자료를 입력할 수 없습니다.")
+                else:
+                    st.success("현재 상태: **활성** — 피평가자가 정상적으로 입력할 수 있습니다.")
+            with col_r:
+                if is_locked:
+                    if st.button("🔓 잠금 해제", use_container_width=True, type="primary"):
+                        set_eval_locked(False)
+                        st.success("✅ 잠금이 해제됐습니다."); st.rerun()
+                else:
+                    if st.button("🔒 입력 잠금", use_container_width=True):
+                        set_eval_locked(True)
+                        st.success("✅ 입력이 잠겼습니다."); st.rerun()
+
+        st.divider()
         st.caption("피평가자 화면의 '성과평가 안내' 탭 내용을 수정합니다.")
         st.divider()
 
