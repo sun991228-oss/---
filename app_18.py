@@ -351,7 +351,7 @@ def delete_notice(notice_id: int):
 
 @st.cache_data(ttl=10)
 def get_eval_locked() -> bool:
-    """평가 입력 잠금 여부 반환"""
+    """평가 입력 잠금 여부 반환 (피평가자용)"""
     sb = get_supabase()
     try:
         rows = sb.table("system_settings").select("value").eq("key","eval_locked").execute().data
@@ -369,6 +369,30 @@ def set_eval_locked(locked: bool):
         "updated_at": datetime.now().isoformat(),
     }).execute()
     get_eval_locked.clear()
+
+@st.cache_data(ttl=10)
+def get_stage_locks() -> dict:
+    """차수별 평가자 잠금 여부 반환 {'1차': bool, '2차': bool, '3차': bool, '4차': bool}"""
+    sb = get_supabase()
+    result = {"1차": False, "2차": False, "3차": False, "4차": False}
+    try:
+        rows = sb.table("system_settings").select("*").like("key","stage_locked_%").execute().data
+        for r in rows:
+            stage = r["key"].replace("stage_locked_","")
+            if stage in result:
+                result[stage] = r["value"] == "true"
+    except Exception:
+        pass
+    return result
+
+def set_stage_locked(stage: str, locked: bool):
+    sb = get_supabase()
+    sb.table("system_settings").upsert({
+        "key":        f"stage_locked_{stage}",
+        "value":      "true" if locked else "false",
+        "updated_at": datetime.now().isoformat(),
+    }).execute()
+    get_stage_locks.clear()
 
 
 # ══════════════════════════════════════════════
@@ -726,6 +750,12 @@ def show_evaluator():
     st.title(f"✍️ {stage} 평가")
     st.caption(f"👤 {ev_name} | 직책: {ev_pos} | 담당 차수: {stage}")
     st.divider()
+
+    # 차수별 잠금 확인
+    stage_locks = get_stage_locks()
+    if stage_locks.get(stage, False):
+        st.warning(f"🔒 {stage} 평가 입력 기간이 종료되었습니다. 입력 및 수정이 불가합니다.")
+        st.stop()
 
     tasks_data  = get_tasks()
     evaluations = get_evaluations()
@@ -1160,7 +1190,7 @@ def show_admin():
     with tab4:
         st.subheader("📢 성과평가 안내 공지 관리")
 
-        # 평가 잠금 토글
+        # 피평가자 입력 잠금 토글
         with st.container(border=True):
             is_locked = get_eval_locked()
             col_l, col_r = st.columns([3, 1])
@@ -1172,13 +1202,41 @@ def show_admin():
                     st.success("현재 상태: **활성** — 피평가자가 정상적으로 입력할 수 있습니다.")
             with col_r:
                 if is_locked:
-                    if st.button("🔓 잠금 해제", use_container_width=True, type="primary"):
+                    if st.button("🔓 잠금 해제", use_container_width=True, type="primary", key="ee_unlock"):
                         set_eval_locked(False)
                         st.success("✅ 잠금이 해제됐습니다."); st.rerun()
                 else:
-                    if st.button("🔒 입력 잠금", use_container_width=True):
+                    if st.button("🔒 입력 잠금", use_container_width=True, key="ee_lock"):
                         set_eval_locked(True)
                         st.success("✅ 입력이 잠겼습니다."); st.rerun()
+
+        st.divider()
+
+        # 차수별 평가자 입력 잠금 토글
+        st.markdown("**🔒 차수별 평가자 입력 잠금**")
+        st.caption("각 차수(1~4차) 평가자의 평가 입력을 개별적으로 잠그거나 해제합니다.")
+
+        stage_labels_lock = {"1차":"1차 (팀장)","2차":"2차 (부장)","3차":"3차 (본부장)","4차":"4차 (대표이사)"}
+        stage_locks = get_stage_locks()
+
+        lock_cols = st.columns(4)
+        for col, stage in zip(lock_cols, ["1차","2차","3차","4차"]):
+            with col:
+                with st.container(border=True):
+                    locked = stage_locks.get(stage, False)
+                    st.markdown(f"**{stage_labels_lock[stage]}**")
+                    if locked:
+                        st.error("🔒 잠금")
+                    else:
+                        st.success("🔓 활성")
+                    if locked:
+                        if st.button("해제", key=f"unlock_{stage}", use_container_width=True, type="primary"):
+                            set_stage_locked(stage, False)
+                            st.success(f"✅ {stage} 잠금 해제됨"); st.rerun()
+                    else:
+                        if st.button("잠금", key=f"lock_{stage}", use_container_width=True):
+                            set_stage_locked(stage, True)
+                            st.success(f"✅ {stage} 잠금됨"); st.rerun()
 
         st.divider()
         st.caption("피평가자 화면의 '성과평가 안내' 탭 내용을 수정합니다.")
